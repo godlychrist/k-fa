@@ -1,122 +1,83 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
-
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+import { useCallback, useEffect, useRef, useState } from 'react';
+import './App.css';
+import ExpenseWorkspace from './ExpenseWorkspace';
+import { SessionExpiredError, syncMailbox } from './syncMailbox';
+import type { Movement } from './MovementEditor';
+import type { Statement, Projection } from './BankingPanel';
+type Tx = Movement;
+export type Data = {
+    user: {
+        id: number;
+        email: string;
+    };
+    accounts: {
+        id: number;
+        email: string;
+        provider: string;
+        last_synced_at: string | null; sync_started_at?: string | null;
+    }[];
+    transactions: Tx[]; statements?: Statement[]; projected_balances?: Projection[];
+    debit_card_links?: { card_reference: string; account_reference: string; currency: string }[];
+    balances: {
+        amount: string;
+        currency: string;
+        account_reference: string;
+        observed_at: string;
+    }[];
+    unrecognized: number; scanned?: number; import_since?: string;
+};
+type Snapshot = {
+    data: Data;
+    savedAt: string;
+};
+const key = 'k-gastos-v1';
+function cached(): Snapshot | null { try {
+    return JSON.parse(localStorage.getItem(key) || 'null');
 }
-
-export default App
+catch {
+    return null;
+} }
+export default function App() {
+    const [snapshot, setSnapshot] = useState<Snapshot | null>(cached), [online, setOnline] = useState(navigator.onLine), [busy, setBusy] = useState(false), [error, setError] = useState(''), [expired, setExpired] = useState(false);
+    const running = useRef(false), csrf = useRef('');
+    const request = useCallback(async (url: string, method = 'GET', body?: Record<string, string>) => { const r = await fetch(url, { method, cache: 'no-store', body: body ? JSON.stringify(body) : undefined, credentials: 'include', headers: { Accept: 'application/json', ...(method === 'POST' ? { 'X-CSRF-TOKEN': csrf.current, ...(body ? { 'Content-Type': 'application/json' } : {}) } : {}) } }); if (r.status === 401 || r.status === 419) {
+        setExpired(true);
+        throw new Error('La sesión venció. Autoriza de nuevo tu correo; tu copia local sigue disponible.');
+    } if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        if (d?.reconnect) setExpired(true);
+        throw new Error(d?.message || 'No se pudo actualizar. Inténtalo de nuevo.');
+    } if (!r.headers.get('content-type')?.includes('application/json')) throw new Error('La app no está conectada al servidor de gastos. Inicia los servidores de Laravel y de la interfaz para actualizar.'); return r.json(); }, []);
+    const save = useCallback((data: Data) => { const next = { data, savedAt: new Date().toISOString() }; setSnapshot(next); try {
+        localStorage.setItem(key, JSON.stringify(next));
+    }
+    catch {
+        setError('No hay espacio para guardar esta actualización sin conexión.');
+    } }, []);
+    const sync = useCallback(async (rescan = false) => { if (!navigator.onLine || running.current)
+        return; running.current = true; setBusy(true); setError(''); try {
+        await syncMailbox<Data>(request, token => { csrf.current = token; }, save, () => navigator.onLine, rescan);
+        setExpired(false);
+    }
+    catch (e) {
+        if (e instanceof SessionExpiredError) setExpired(true);
+        setError(e instanceof Error ? e.message : 'No se pudo conectar al servidor.');
+    }
+    finally {
+        running.current = false;
+        setBusy(false);
+    } }, [request, save]);
+    useEffect(() => { const on = () => { setOnline(true); void sync(); }, off = () => setOnline(false), visible = () => { if (document.visibilityState === 'visible')
+        void sync(); }; window.addEventListener('online', on); window.addEventListener('offline', off); document.addEventListener('visibilitychange', visible); const timer = setInterval(() => void sync(), 300000); const initial = setTimeout(() => void sync(), 0); return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); document.removeEventListener('visibilitychange', visible); clearInterval(timer); clearTimeout(initial); }; }, [sync]);
+    async function logout() { try {
+        await request('/api/logout', 'POST');
+        localStorage.removeItem(key);
+        setSnapshot(null);
+        setExpired(false);
+    }
+    catch (e) {
+        setError(e instanceof Error ? e.message : 'No se pudo cerrar la sesión.');
+    } }
+    async function mutate(url: string, body: Record<string, string>) { await request(url, 'POST', body); save(await request('/api/dashboard')); }
+    return <ExpenseWorkspace data={snapshot?.data} online={online} busy={busy} expired={expired} error={error} savedAt={snapshot?.savedAt} sync={sync} mutate={mutate} logout={logout} />;
+}
