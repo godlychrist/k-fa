@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "node scripts/test-views.mjs && node scripts/test-sync.mjs"
+    "test": "node scripts/test-views.mjs && node scripts/test-sync.mjs",
+    "test:mobile": "node scripts/test-mobile.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
