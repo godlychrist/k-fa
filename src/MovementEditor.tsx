@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { createPortal } from 'react-dom'
+import './MovementEditor.css'
 
 export type Movement = { id: number; kind: string; amount: string; currency: string; merchant: string | null; occurred_at: string; date_from_email: boolean; account_reference: string | null; subject: string | null; instrument_type?: string; mail_record_id?: number | null; notes?: string | null; user_edited?: boolean }
 type BalanceAccount = { account_reference: string; currency: string; amount: string; base_at?: string; observed_at?: string }
@@ -11,7 +13,7 @@ function localTime(value: string) {
 }
 
 export default function MovementEditor({ balances, movement, currency, online, mutate, onClose, onSaved }: Props) {
-  const dialog = useRef<HTMLDialogElement>(null)
+  const dialog = useRef<HTMLDivElement>(null)
   const clientId = useRef(crypto.randomUUID())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -29,8 +31,37 @@ export default function MovementEditor({ balances, movement, currency, online, m
 
   useEffect(() => {
     const node = dialog.current
-    node?.showModal()
-    return () => node?.close()
+    const overlay = node?.parentElement
+    const previousFocus = document.activeElement as HTMLElement | null
+    const previousOverflow = document.body.style.overflow
+    const root = document.getElementById('root')
+    const previousInert = root?.inert
+    document.body.style.overflow = 'hidden'
+    if (root) root.inert = true
+    const fitViewport = () => {
+      const viewport = window.visualViewport
+      overlay?.style.setProperty('--editor-height', `${viewport?.height ?? window.innerHeight}px`)
+      overlay?.style.setProperty('--editor-width', `${viewport?.width ?? window.innerWidth}px`)
+      overlay?.style.setProperty('--editor-top', `${viewport?.offsetTop ?? 0}px`)
+      overlay?.style.setProperty('--editor-left', `${viewport?.offsetLeft ?? 0}px`)
+      const focused = document.activeElement as HTMLElement | null
+      if (focused && focused !== node && node?.contains(focused)) {
+        requestAnimationFrame(() => focused.scrollIntoView({ block: 'nearest' }))
+      }
+    }
+    fitViewport()
+    node?.focus({ preventScroll: true })
+    window.addEventListener('resize', fitViewport)
+    window.visualViewport?.addEventListener('resize', fitViewport)
+    window.visualViewport?.addEventListener('scroll', fitViewport)
+    return () => {
+      window.removeEventListener('resize', fitViewport)
+      window.visualViewport?.removeEventListener('resize', fitViewport)
+      window.visualViewport?.removeEventListener('scroll', fitViewport)
+      document.body.style.overflow = previousOverflow
+      if (root) root.inert = previousInert ?? false
+      previousFocus?.focus({ preventScroll: true })
+    }
   }, [])
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setSaving(true); setError('')
@@ -44,7 +75,15 @@ export default function MovementEditor({ balances, movement, currency, online, m
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'No se pudo guardar el movimiento.') }
     finally { setSaving(false) }
   }
-  return <dialog ref={dialog} className="movement-dialog" aria-labelledby="editor-title" onCancel={event => { if (saving) event.preventDefault(); else onClose() }}>
+  return createPortal(<div className="movement-overlay"><div ref={dialog} className="movement-panel" role="dialog" aria-modal="true" tabIndex={-1} aria-labelledby="editor-title" onKeyDown={event => {
+    if (event.key === 'Escape') { event.preventDefault(); if (!saving) onClose() }
+    if (event.key === 'Tab') {
+      const targets = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not([type="hidden"]), select, textarea, summary') || []).filter(node => node.getClientRects().length > 0)
+      const first = targets[0], last = targets[targets.length - 1]
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus() }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+    }
+  }}>
     <div className="dialog-heading"><div><span className="eyebrow">TU DINERO</span><h2 id="editor-title">{movement ? 'Editar movimiento' : 'Agregar movimiento'}</h2></div><button type="button" className="close-button" aria-label="Cerrar editor" disabled={saving} onClick={onClose}>&times;</button></div>
     <form className="movement-form" onSubmit={event => void submit(event)} onInvalid={event => { const details = (event.target as HTMLElement).closest('details'); if (details) details.open = true }}>
       <div className="movement-fields">
@@ -58,5 +97,5 @@ export default function MovementEditor({ balances, movement, currency, online, m
       </div>
       <div className="dialog-actions"><button type="button" className="secondary" disabled={saving} onClick={onClose}>Cancelar</button><button disabled={!online || saving}>{saving ? 'Guardando...' : movement ? 'Guardar cambios' : kind === 'income' ? 'Agregar ingreso' : 'Agregar gasto'}</button></div>
     </form>
-  </dialog>
+  </div></div>, document.body)
 }
